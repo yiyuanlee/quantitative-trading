@@ -1,0 +1,52 @@
+# ============================================================
+# AlphaFlow 参数配置文件
+# 所有策略参数集中管理，实盘/回测共用同一套配置
+# ============================================================
+
+strategy:
+  # 均线周期参数
+  fast_period: 10          # 快线周期 (EMA)
+  slow_period: 25          # 慢线周期 (EMA)  [注: V3.0用的是30]
+  trend_period: 200        # 趋势过滤均线周期 (SMA/EMA)
+
+  # RSI 参数
+  rsi_period: 14           # RSI 计算周期
+  rsi_upper: 65            # RSI 上限（避免追高）
+
+  # ADX 趋势强度参数
+  adx_period: 14           # ADX 计算周期
+  adx_threshold: 20        # ADX 阈值（低于此值不入场）
+
+  # ATR 波动率参数
+  atr_period: 14           # ATR 计算周期
+  atr_multiplier: 2.5      # ATR 止损倍数
+
+  # 移动止盈
+  trailing_stop: 0.12     # 从持仓最高点回撤百分比
+
+risk:
+  risk_per_trade: 0.015    # 每笔交易风险敞口 (1.5%)
+  index_multiplier: 3.0   # 大盘指数 (QQQ/VOO) 风险倍数
+
+backtest:
+  initial_cash: 3000.0     # 初始资金
+  commission: 0.001       # 交易佣金 (0.1%)
+  start_date: "2022-01-01"
+  end_date: "2026-03-20"
+
+live:
+  tws_host: "127.0.0.1"
+  tws_port: 7497
+  client_id: 1
+  scan_interval_seconds: 3600
+
+# 回测标的列表
+tickers:
+  - "QQQ"
+  - "VOO"
+  - "NVDA"
+  - "MSFT"
+  - "AMD"
+  - "AAPL"
+  - "GOOGL"
+  - "TSLA"

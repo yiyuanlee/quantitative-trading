@@ -10,33 +10,52 @@
 这是一个基于 Python 开发的自动化量化交易系统，专门针对 **Interactive Brokers (IBKR)** 小额账户（$3,000+）进行优化。
 
 ### 📈 项目概览
-本项目旨在利用量化手段，在控制风险的前提下，实现美股市场的趋势跟踪交易。目前已完成 **V3.0 版本** 的回测系统开发，核心重点在于“风险控制”与“波动率自适应”。
+AlphaFlow 旨在利用量化手段，在控制风险的前提下，实现美股市场的趋势跟踪交易。V3.0 完成回测引擎开发，核心重点在于"风险控制"与"波动率自适应"。
 
 ### 🛠️ 技术栈
 * **语言**: Python 3.10+
 * **回测框架**: [Backtrader](https://www.backtrader.com/)
 * **数据源**: Yahoo Finance (yfinance)
+* **配置文件**: config.yaml（参数集中管理）
 * **未来规划**: 对接 IBKR API (ib_insync)
 
-### 🧠 策略逻辑 (V3.0)
-该策略采用了多重过滤机制，以应对高波动市场：
-1. **趋势过滤**: 仅在价格高于 **200日均线 (SMA 200)** 的牛市环境下入场。
-2. **入场信号**: 10日快线金叉30日慢线，且 **RSI < 70** (避免追高)。
-3. **风险管理 (核心)**: 
-   * **ATR 自适应止损**: 基于平均真实波幅 (ATR) 的 2.5 倍动态设置止损位，自动适应市场波动。
-   * **移动止损 (Trailing Stop)**: 股价从持仓最高点回撤 15% 时自动锁利离场。
+### 🧠 策略逻辑 (V7.0)
+采用多重过滤机制，应对高波动市场：
+1. **趋势过滤**: 仅在价格高于 **200日均线** 的牛市环境下入场
+2. **入场信号**: EMA 10 日线上穿 EMA 25 日线，同时 **RSI < 65** 且 **ADX > 20**（趋势强度确认）
+3. **风险管理 (核心)**:
+   * **ATR 自适应止损**: 动态设置止损位，2.5 倍 ATR 自动适应市场波动
+   * **移动止盈 (Trailing Stop)**: 从持仓最高点回撤 12% 时自动锁利离场
+   * **指数权重加成**: QQQ/VOO 获得 3 倍风险预算
 
-### 📊 阶段性回测结果 (AMD 测试)
-| 指标 | 结果 |
-| :--- | :--- |
-| **测试周期** | 2022-01-01 至 2026-03-20 |
-| **总收益率** | 42.02% |
-| **最大回撤** | 28.12% |
-| **夏普比率** | 0.59 |
+### 📊 多标的回测结果（2022-01-01 ~ 2026-03-20）
+**初始资金: $3,000 | 佣金: 0.1%**
+
+| 标的 | 收益率 | 夏普比率 | 最大回撤 | 交易数 | 胜率 |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **VOO** | **+28.33%** 🟢 | **0.59** | 5.32% | 3 | 100% |
+| **QQQ** | **+9.34%** 🟢 | **0.26** | 6.68% | 2 | 50% |
+| GOOGL | +4.18% | -0.10 | 2.63% | 2 | 100% |
+| TSLA | +0.12% | -3.71 | 0.79% | 1 | 100% |
+| NVDA | -0.70% | -1.86 | 2.53% | 3 | 33% |
+| AMD | -1.63% | -2.03 | 2.35% | 2 | 0% |
+| AAPL | -6.00% | -1.46 | 6.19% | 4 | 0% |
+| MSFT | 0.00% | 0.0 | 0.00% | 0 | — |
+| **平均** | **+4.21%** | **-1.04** | **3.31%** | **17** | — |
+
+> 📌 **策略更适合大盘指数**（VOO/QQQ）：趋势跟踪策略在具有明确趋势的大盘指数上表现更稳定，个股受突发新闻影响大，信号频繁失效。
 
 ### 🚀 快速开始
-1. **环境安装**: `pip install backtrader yfinance pandas matplotlib`
-2. **运行回测**: `python backtest_pro.py`
+
+```bash
+# 1. 安装依赖
+pip install backtrader yfinance pandas matplotlib pyyaml
+
+# 2. 运行多标的回测（输出汇总表格）
+python backtest_multi.py
+
+# 3. 自定义参数（编辑 config.yaml）
+```
 
 ---
 
@@ -46,33 +65,52 @@
 An automated quantitative trading system developed in Python, specifically optimized for **Interactive Brokers (IBKR)** small accounts ($3,000+).
 
 ### 📈 Project Overview
-AlphaFlow aims to implement trend-following strategies in the US stock market while maintaining strict risk control. With **V3.0**, the backtesting engine is fully functional, focusing on "Risk Management" and "Volatility Adaptation."
+AlphaFlow aims to implement trend-following strategies in the US stock market while maintaining strict risk control. The V3.0 backtesting engine is fully functional, focusing on "Risk Management" and "Volatility Adaptation."
 
 ### 🛠️ Tech Stack
 * **Language**: Python 3.10+
 * **Backtesting**: [Backtrader](https://www.backtrader.com/)
 * **Data Source**: Yahoo Finance (yfinance)
+* **Config**: config.yaml (centralized parameters)
 * **Roadmap**: IBKR API Integration (ib_insync)
 
-### 🧠 Strategy Logic (V3.0)
-The strategy employs multiple filters to navigate high-volatility markets:
-1. **Trend Filter**: Long positions are only taken when the price is above the **200-day SMA**.
-2. **Entry Signal**: 10-day SMA crosses above 30-day SMA, with **RSI < 70** to avoid overbought conditions.
-3. **Risk Management (Core)**: 
-   * **ATR Adaptive Stop-Loss**: Dynamic stops set at 2.5x ATR to adjust for market volatility.
-   * **Trailing Stop**: Automatic profit-taking if the price drops 15% from its peak.
+### 🧠 Strategy Logic (V7.0)
+Multiple filters to navigate high-volatility markets:
+1. **Trend Filter**: Long positions only when price is above the **200-day EMA**
+2. **Entry Signal**: EMA 10 crosses above EMA 25, with **RSI < 65** and **ADX > 20** (trend strength confirmation)
+3. **Risk Management (Core)**:
+   * **ATR Adaptive Stop-Loss**: Dynamic stops at 2.5x ATR
+   * **Trailing Stop**: Auto-exit when price drops 12% from peak
+   * **Index Weight Boost**: QQQ/VOO receive 3x risk allocation
 
-### 📊 Backtesting Results (Case Study: AMD)
-| Metric | Result |
-| :--- | :--- |
-| **Period** | 2022-01-01 to 2026-03-20 |
-| **Total Return** | 42.02% |
-| **Max Drawdown** | 28.12% |
-| **Sharpe Ratio** | 0.59 |
+### 📊 Multi-Asset Backtest Results (2022-01-01 ~ 2026-03-20)
+**Initial Capital: $3,000 | Commission: 0.1%**
+
+| Ticker | Return | Sharpe | Max DD | Trades | Win Rate |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **VOO** | **+28.33%** 🟢 | **0.59** | 5.32% | 3 | 100% |
+| **QQQ** | **+9.34%** 🟢 | **0.26** | 6.68% | 2 | 50% |
+| GOOGL | +4.18% | -0.10 | 2.63% | 2 | 100% |
+| TSLA | +0.12% | -3.71 | 0.79% | 1 | 100% |
+| NVDA | -0.70% | -1.86 | 2.53% | 3 | 33% |
+| AMD | -1.63% | -2.03 | 2.35% | 2 | 0% |
+| AAPL | -6.00% | -1.46 | 6.19% | 4 | 0% |
+| MSFT | 0.00% | 0.0 | 0.00% | 0 | — |
+| **Average** | **+4.21%** | **-1.04** | **3.31%** | **17** | — |
+
+> 📌 **Strategy is better suited for broad-market indices** (VOO/QQQ): Trend-following strategies perform more consistently on indices with clear trends, while individual stocks are more vulnerable to news-driven volatility.
 
 ### 🚀 Quick Start
-1. **Installation**: `pip install backtrader yfinance pandas matplotlib`
-2. **Run Backtest**: `python backtest_pro.py`
+
+```bash
+# 1. Install dependencies
+pip install backtrader yfinance pandas matplotlib pyyaml
+
+# 2. Run multi-asset backtest
+python backtest_multi.py
+
+# 3. Customize parameters (edit config.yaml)
+```
 
 ---
 
@@ -80,8 +118,9 @@ The strategy employs multiple filters to navigate high-volatility markets:
 - [x] **V1.0**: Basic Moving Average Crossover / 基础均线交叉策略
 - [x] **V2.0**: SMA 200 Filter & Fixed Stop-loss / 引入200日线过滤与固定止损
 - [x] **V3.0**: ATR Volatility & Trailing Stop / 引入ATR动态止损与移动止损
-- [ ] **V4.0**: Multi-asset Portfolio Management / 多标的资产组合配置
+- [x] **V4.0**: Multi-asset Portfolio Backtest / 多标的资产组合回测
 - [ ] **V5.0**: IBKR Paper Trading Integration / 对接IBKR模拟账户实盘测试
+- [ ] **V6.0**: Parameter optimization via config.yaml / 参数配置化管理
 
 ## ⚠️ Disclaimer / 免责声明
 This project is for academic and technical discussion only. It does NOT constitute investment advice. Trading involves significant risk. The author is not responsible for any financial losses incurred from using this software.
