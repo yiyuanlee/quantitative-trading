@@ -1,0 +1,122 @@
+# Changelog
+
+All notable changes to AlphaFlow will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [8.1.0] - 2026-05-11
+
+### Added
+- **`optimize.py`** — 参数优化框架（网格搜索 + 贝叶斯优化）
+  - 支持多参数并行扫描
+  - 自动保存最优参数组合到 `optimal_params.yaml`
+  - 输出 Top-10 参数组合排行榜
+  - 对单个或多个标的分别优化
+- **`CHANGELOG.md`** — 版本变更日志（本文档）
+- **`backtest_main.py`** — 统一回测入口（废弃旧版 `backtest_multi.py`/`backtest_pro.py`/`backtest_v4.0.py`）
+- **`equity_curve.png`** — 回测权益曲线图（由 `backtest_main.py` 自动生成）
+
+### Changed
+- **`README.md`** — 统一中英文版本为 V8.1
+  - 英文部分更新至 V8.1（此前为 V7.0）
+  - 标注 `ib_insync` 已实现（非 Roadmap）
+  - 新增文件结构说明
+- **`requirements.txt`** — 新增依赖声明
+
+### Deprecated
+- `backtest_multi.py` — 使用 `backtest_main.py` 替代
+- `backtest_pro.py` — 保留参考，已废弃
+- `backtest_v4.0.py` — 保留参考，已废弃
+
+---
+
+## [8.0.0] - 2026-04-30
+
+### Added
+- **`ibkr_trading_system_v8.py`** — 完整实盘交易系统
+  - IBKR API 连接（ib_insync）
+  - 实时行情扫描 + 自动下单
+  - 订单成交确认回调
+  - 日志记录
+- **`ibkr_trading_system_v9.py`** — 实盘系统 v9（experimental）
+
+### Changed
+- 策略风控逻辑完善：ATR 动态止损 + Trailing Stop 双保险
+- README 添加"实盘交易"说明
+
+---
+
+## [7.0.0] - 2026-04-15
+
+### Added
+- RSI 确认信号（RSI < 65 避免追高）
+- ADX 趋势强度过滤（ADX > 20）
+- 多标的组合回测框架
+
+### Changed
+- 策略版本号升至 V7.0
+
+---
+
+## [6.0.0] - 2026-04-01
+
+### Added
+- **`config.yaml`** — 参数集中化管理
+  - 所有策略参数可在此配置，无需改动代码
+
+---
+
+## [5.0.0] - 2026-03-15
+
+### Added
+- IBKR 模拟账户实盘测试（ib_insync）
+- 数据源切换为 Yahoo Finance（yfinance）
+
+---
+
+## [4.0.0] - 2026-03-01
+
+### Added
+- 多标的组合回测引擎
+- 指数权重加成（QQQ/VOO 获得 3x 风险预算）
+
+---
+
+## [3.0.0] - 2026-02-15
+
+### Added
+- ATR 动态止损
+- 移动止盈（Trailing Stop）
+
+---
+
+## [2.0.0] - 2026-02-01
+
+### Added
+- SMA 200 趋势过滤
+- 固定止损
+
+---
+
+## [1.0.0] - 2026-01-15
+
+### Added
+- 基础均线交叉策略（EMA 10 / EMA 25）
+- Backtrader 回测框架搭建
+- 初始项目结构
+
+---
+
+[Unreleased]: https://github.com/yiyuanlee/AlphaFlow/compare/v8.1.0...HEAD
+[8.1.0]: https://github.com/yiyuanlee/AlphaFlow/compare/v8.0.0...v8.1.0
+[8.0.0]: https://github.com/yiyuanlee/AlphaFlow/compare/v7.0.0...v8.0.0
+[7.0.0]: https://github.com/yiyuanlee/AlphaFlow/compare/v6.0.0...v7.0.0
+[6.0.0]: https://github.com/yiyuanlee/AlphaFlow/compare/v5.0.0...v6.0.0
+[5.0.0]: https://github.com/yiyuanlee/AlphaFlow/compare/v4.0.0...v5.0.0
+[4.0.0]: https://github.com/yiyuanlee/AlphaFlow/compare/v3.0.0...v4.0.0
+[3.0.0]: https://github.com/yiyuanlee/AlphaFlow/compare/v2.0.0...v3.0.0
+[2.0.0]: https://github.com/yiyuanlee/AlphaFlow/compare/v1.0.0...v2.0.0
+[1.0.0]: https://github.com/yiyuanlee/AlphaFlow/tree/v1.0.0
