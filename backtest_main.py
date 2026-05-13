@@ -1,7 +1,8 @@
 """
-AlphaFlow - 统一回测入口
+AlphaFlow - 真实组合回测入口
 ===========================
-所有回测通过这一个脚本运行，输出汇总表格 + Equity Curve 图。
+所有标的在同一个资金池（$10,000）中共同交易，相互竞争资金。
+资金分配规则：60% 资金上限用于指数类 (VOO, QQQ)，40% 资金上限用于个股类。
 用法: python backtest_main.py
 """
 
@@ -22,6 +23,10 @@ from pathlib import Path
 # --- 解决 Windows 终端中文显示 ---
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
+# --- 解决 Matplotlib 中文乱码 ---
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS']
+plt.rcParams['axes.unicode_minus'] = False
+
 # --- 颜色配置 ---
 GREEN = '#10B981'
 RED   = '#EF4444'
@@ -35,7 +40,7 @@ def load_config():
 
 
 # ============================================================
-# 策略逻辑 (V8.1)
+# 策略逻辑 (V9.0) — 真实组合回测 + 资金池分配
 # ============================================================
 class AlphaFlowStrategy(bt.Strategy):
     params = dict(
@@ -43,8 +48,13 @@ class AlphaFlowStrategy(bt.Strategy):
         rsi_period=14, rsi_upper=65,
         adx_period=14, adx_threshold=20,
         atr_period=14, atr_multiplier=2.5,
+        vol_filter_period=100,
+        vol_filter_ratio=0.8,
+        trailing_atr_mult=3.0,
         trailing_stop=0.12,
-        risk_per_trade=0.015, index_multiplier=3.0,
+        risk_per_trade=0.030,
+        alloc_index=0.60,
+        alloc_stock=0.40,
         printlog=False,
     )
 
@@ -55,18 +65,23 @@ class AlphaFlowStrategy(bt.Strategy):
 
     def __init__(self):
         self.inds = {}
+        # 用于手动统计各标的交易情况
+        self.trade_stats = {d._name: {'trades': 0, 'won': 0, 'pnl': 0.0} for d in self.datas}
+
         for d in self.datas:
+            atr = bt.indicators.ATR(d, period=self.p.atr_period)
             self.inds[d] = {
                 'ema_fast':  bt.indicators.EMA(d, period=self.p.fast_period),
                 'ema_slow':  bt.indicators.EMA(d, period=self.p.slow_period),
                 'ema_trend': bt.indicators.EMA(d, period=self.p.trend_period),
                 'rsi':       bt.indicators.RSI(d, period=self.p.rsi_period),
-                'atr':       bt.indicators.ATR(d, period=self.p.atr_period),
+                'atr':       atr,
                 'adx':       bt.indicators.ADX(d, period=self.p.adx_period),
                 'crossover': bt.indicators.CrossOver(
                     bt.indicators.EMA(d, period=self.p.fast_period),
                     bt.indicators.EMA(d, period=self.p.slow_period)
                 ),
+                'atr_sma':   bt.indicators.SMA(atr, period=self.p.vol_filter_period),
                 'stop_price':    None,
                 'highest_price': None,
             }
@@ -76,25 +91,65 @@ class AlphaFlowStrategy(bt.Strategy):
             d = order.data
             if order.isbuy():
                 self.inds[d]['stop_price']    = order.executed.price - self.inds[d]['atr'][0] * self.p.atr_multiplier
-                self.inds[d]['highest_price']   = order.executed.price
+                self.inds[d]['highest_price'] = order.executed.price
             else:
                 self.inds[d]['stop_price']    = None
                 self.inds[d]['highest_price'] = None
 
+    def notify_trade(self, trade):
+        if trade.isclosed:
+            name = trade.data._name
+            self.trade_stats[name]['trades'] += 1
+            self.trade_stats[name]['pnl'] += trade.pnlcomm
+            if trade.pnlcomm > 0:
+                self.trade_stats[name]['won'] += 1
+
+    def stop(self):
+        # 回测结束时，计算所有未平仓头寸的浮动盈亏（主要针对长线持有的 VOO 和 QQQ）
+        for d in self.datas:
+            pos = self.getposition(d)
+            if pos:
+                pnl = pos.size * (d.close[0] - pos.price)
+                name = d._name
+                self.trade_stats[name]['trades'] += 1
+                self.trade_stats[name]['pnl'] += pnl
+                if pnl > 0:
+                    self.trade_stats[name]['won'] += 1
+
     def next(self):
+        total_value = self.broker.getvalue()
+        
+        # 计算当前指数和个股的已用资金敞口
+        index_exposure = 0.0
+        stock_exposure = 0.0
+        
+        for d in self.datas:
+            pos = self.getposition(d)
+            if pos:
+                val = pos.size * d.close[0]
+                if d._name in ['VOO', 'QQQ']:
+                    index_exposure += val
+                else:
+                    stock_exposure += val
+
         for d in self.datas:
             pos  = self.getposition(d)
             ind  = self.inds[d]
-            ev   = ind['ema_fast'][0] - ind['ema_slow'][0]
+            is_index = d._name in ['VOO', 'QQQ']
 
             if pos:
+                if is_index:
+                    continue  # 指数长线持有，不触发任何止盈止损逻辑
                 ind['highest_price'] = max(ind['highest_price'], d.close[0])
                 # ATR 止损
                 if d.close[0] < ind['stop_price']:
                     self.close(d)
                     continue
-                # Trailing Stop
-                if d.close[0] < ind['highest_price'] * (1.0 - self.p.trailing_stop):
+                # ATR 动态移动止盈
+                atr_trail = ind['highest_price'] - ind['atr'][0] * self.p.trailing_atr_mult
+                pct_trail = ind['highest_price'] * (1.0 - self.p.trailing_stop)
+                trailing_level = min(atr_trail, pct_trail)
+                if d.close[0] < trailing_level:
                     self.close(d)
                     continue
                 # 死叉离场
@@ -102,25 +157,50 @@ class AlphaFlowStrategy(bt.Strategy):
                     self.close(d)
 
             else:
+                if is_index:
+                    # 指数长线持有：在第一天（无持仓时）直接买入，平分 index 的配置额度（假设 VOO 和 QQQ 两个指数，各一半）
+                    target_val = total_value * (self.p.alloc_index / 2.0)
+                    available_cash = self.broker.get_cash() * 0.95
+                    actual_val = max(min(target_val, available_cash), 0)
+                    
+                    size = int(actual_val / d.close[0])
+                    if size > 0:
+                        self.buy(d, size=size)
+                        index_exposure += size * d.close[0]
+                    continue
+
+                # 个股：继续动量趋势策略
                 trend_ok  = d.close[0] > ind['ema_trend'][0]
                 cross_ok  = ind['crossover'] > 0
                 rsi_ok    = ind['rsi'][0] < self.p.rsi_upper
                 adx_ok    = ind['adx'][0] > self.p.adx_threshold
+                vol_ok    = ind['atr'][0] > ind['atr_sma'][0] * self.p.vol_filter_ratio
 
-                if trend_ok and cross_ok and rsi_ok and adx_ok:
-                    total_value = self.broker.getvalue()
-                    risk_mult   = self.p.index_multiplier if d._name in ['QQQ', 'VOO'] else 1.0
-                    risk_amount = total_value * self.p.risk_per_trade * risk_mult
+                if trend_ok and cross_ok and rsi_ok and adx_ok and vol_ok:
+                    risk_amount = total_value * self.p.risk_per_trade
                     atr_stop    = max(ind['atr'][0] * self.p.atr_multiplier, 0.01)
                     size = int(risk_amount / atr_stop)
-
-                    # 现金约束检查：仓位不能超过可用现金
-                    if size * d.close[0] > self.broker.get_cash():
-                        size = int(self.broker.get_cash() * 0.95 / d.close[0])
+                    
+                    order_val = size * d.close[0]
+                    
+                    # 资金池分配检查（个股）
+                    max_allowed_val = total_value * self.p.alloc_stock
+                    available_val = max_allowed_val - stock_exposure
+                        
+                    # 取可用分配额度和账户实际可用现金的较小值
+                    available_cash = self.broker.get_cash() * 0.95
+                    actual_available = max(min(available_val, available_cash), 0)
+                    
+                    if order_val > actual_available:
+                        size = int(actual_available / d.close[0])
 
                     if size <= 0:
                         continue
+                        
                     self.buy(d, size=size)
+                    
+                    # 更新敞口，防止同一次 next() 循环中连续超买
+                    stock_exposure += size * d.close[0]
 
 
 # ============================================================
@@ -129,8 +209,6 @@ class AlphaFlowStrategy(bt.Strategy):
 def fetch_data(ticker, start, end):
     try:
         df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
-        # yfinance 新版返回 MultiIndex 列名 (e.g. ('Close', 'QQQ'))
-        # backtrader 需要简单字符串列名，这里做扁平化处理
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df['openinterest'] = 0
@@ -141,25 +219,31 @@ def fetch_data(ticker, start, end):
 
 
 # ============================================================
-# 单标的回测
+# 组合回测
 # ============================================================
-def backtest_ticker(ticker, config):
+def run_portfolio_backtest(config):
     p = config['strategy']
     cash = config['backtest']['initial_cash']
     commission = config['backtest']['commission']
     start = config['backtest']['start_date']
     end   = config['backtest']['end_date']
+    tickers = config['tickers']
 
-    df = fetch_data(ticker, start, end)
-    if df is None or len(df) < 60:
-        return None
+    print('\n' + '='*65)
+    print('  AlphaFlow V9.0 真实组合回测中 (60%指数 / 40%个股)...')
+    print('='*65)
 
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(cash)
     cerebro.broker.setcommission(commission)
 
-    data = bt.feeds.PandasData(dataname=df)
-    cerebro.adddata(data, name=ticker)
+    valid_tickers = []
+    for t in tickers:
+        df = fetch_data(t, start, end)
+        if df is not None and len(df) >= 60:
+            data = bt.feeds.PandasData(dataname=df)
+            cerebro.adddata(data, name=t)
+            valid_tickers.append(t)
 
     cerebro.addstrategy(
         AlphaFlowStrategy,
@@ -172,140 +256,115 @@ def backtest_ticker(ticker, config):
         adx_threshold=p.get('adx_threshold', 20),
         atr_period=p.get('atr_period', 14),
         atr_multiplier=p.get('atr_multiplier', 2.5),
+        vol_filter_period=p.get('vol_filter_period', 100),
+        vol_filter_ratio=p.get('vol_filter_ratio', 0.8),
+        trailing_atr_mult=p.get('trailing_atr_mult', 3.0),
         trailing_stop=p.get('trailing_stop', 0.12),
-        risk_per_trade=config['risk'].get('risk_per_trade', 0.015),
-        index_multiplier=config['risk'].get('index_multiplier', 3.0),
+        risk_per_trade=config['risk'].get('risk_per_trade', 0.030),
+        alloc_index=config['risk'].get('alloc_index', 0.60),
+        alloc_stock=config['risk'].get('alloc_stock', 0.40),
     )
 
-    # 添加分析器
-    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', riskfreerate=0.04)
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+    cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
 
-    initial = cerebro.broker.getvalue()
+    initial_value = cerebro.broker.getvalue()
     strats = cerebro.run()
-    final   = cerebro.broker.getvalue()
-    ret     = (final - initial) / initial * 100
-
-    # 提取分析器结果
     strat = strats[0]
-    trade_analysis = strat.analyzers.trades.get_analysis()
+    
+    final_value = cerebro.broker.getvalue()
+    total_return = (final_value - initial_value) / initial_value * 100
+
     sharpe_analysis = strat.analyzers.sharpe.get_analysis()
     dd_analysis = strat.analyzers.drawdown.get_analysis()
+    time_returns = strat.analyzers.timereturn.get_analysis()
 
-    total_trades = trade_analysis.get('total', {}).get('total', 0)
-    won = trade_analysis.get('won', {}).get('total', 0)
-    win_rate = (won / total_trades * 100) if total_trades > 0 else 0.0
     sharpe = sharpe_analysis.get('sharperatio', 0.0) or 0.0
     max_dd = dd_analysis.get('max', {}).get('drawdown', 0.0) or 0.0
 
     return {
-        'ticker':         ticker,
-        'return':         ret,
-        'final_value':    final,
-        'trades':         total_trades,
-        'win_rate':       win_rate,
-        'sharpe':         round(sharpe, 2),
-        'max_drawdown':   round(max_dd, 2),
+        'initial': initial_value,
+        'final': final_value,
+        'return': total_return,
+        'sharpe': sharpe,
+        'max_drawdown': max_dd,
+        'trade_stats': strat.trade_stats,
+        'time_returns': time_returns
     }
-
-
-# ============================================================
-# 汇总所有标的
-# ============================================================
-def run_backtest(config):
-    tickers = config['tickers']
-    results = []
-
-    print('\n' + '='*55)
-    print('  AlphaFlow V8.1 回测中...')
-    print('='*55)
-
-    for t in tickers:
-        r = backtest_ticker(t, config)
-        if r:
-            results.append(r)
-
-    return results
 
 
 # ============================================================
 # 打印汇总表格
 # ============================================================
-def print_summary(results):
-    if not results:
-        print('No results.')
-        return
+def print_summary(res):
+    print(f"\n【整体组合表现】")
+    print(f"初始资金: ${res['initial']:,.2f}")
+    print(f"结束净值: ${res['final']:,.2f}")
+    print(f"总收益率: {res['return']:+.2f}%")
+    print(f"夏普比率: {res['sharpe']:.2f}")
+    print(f"最大回撤: {res['max_drawdown']:.2f}%")
 
-    print()
-    header = f'{"标的":<8} {"收益率":>10} {"夏普比率":>10} {"最大回撤":>10} {"交易数":>6} {"胜率":>8}'
+    print(f"\n【各标的贡献 (PnL)】")
+    header = f'{"标的":<8} {"净利润(PnL)":>12} {"交易数":>8} {"胜率":>8}'
     print(header)
-    print('-' * 60)
-    for r in results:
-        flag = '🟢' if r['return'] >= 0 else '🔴'
-        wr = f"{r['win_rate']:.0f}%" if r['trades'] > 0 else '—'
-        print(f'{r["ticker"]:<8} {r["return"]:>+8.2f}%  {r["sharpe"]:>8.2f}  {r["max_drawdown"]:>8.2f}%  {r["trades"]:>4}  {wr:>6}  {flag}')
-    print('-' * 60)
-    avg_ret = np.mean([r['return'] for r in results])
-    avg_sharpe = np.mean([r['sharpe'] for r in results])
-    avg_dd = np.mean([r['max_drawdown'] for r in results])
-    total_trades = sum(r['trades'] for r in results)
-    print(f'{"平均":<8} {avg_ret:>+8.2f}%  {avg_sharpe:>8.2f}  {avg_dd:>8.2f}%  {total_trades:>4}')
-
-    # 找出最佳标的
-    best = max(results, key=lambda x: x['return'])
-    print(f'\n🏆 最佳标的: {best["ticker"]} ({best["return"]:+.2f}%)')
-
-    # 保存结果到 CSV
-    df = pd.DataFrame(results)
-    df.to_csv('backtest_results.csv', index=False)
-    print(f'💾 结果已保存: backtest_results.csv')
+    print('-' * 42)
+    
+    stats = res['trade_stats']
+    # 转换为列表排序
+    sorted_stats = sorted(stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+    
+    for ticker, info in sorted_stats:
+        pnl = info['pnl']
+        trades = info['trades']
+        won = info['won']
+        win_rate = f"{(won/trades)*100:.0f}%" if trades > 0 else '—'
+        flag = '🟢' if pnl > 0 else ('🔴' if pnl < 0 else '⚪')
+        print(f'{ticker:<8} ${pnl:>11,.2f} {trades:>8} {win_rate:>8} {flag}')
 
 
 # ============================================================
 # 生成 Equity Curve 图
 # ============================================================
-def plot_equity_curves(results, config):
-    cash   = config['backtest']['initial_cash']
-    tickers = [r['ticker'] for r in results]
+def plot_portfolio_equity(res):
+    time_returns = res['time_returns']
+    if not time_returns:
+        return
+
+    # 转换 datetime 和 value
+    dates = list(time_returns.keys())
+    # timereturn 是每日收益率，需要转换为累计净值
+    # 但是 backtrader 的 TimeReturn 如果没有 fund=True，可能只是单期 return
+    # 我们自己算复利累计净值
+    returns = list(time_returns.values())
+    
+    # 计算累计收益率
+    cumulative = np.cumprod([1.0 + r for r in returns])
+    # 减1变成百分比收益
+    cumulative_pct = (cumulative - 1.0) * 100
 
     fig, ax = plt.subplots(figsize=(10, 5))
     fig.patch.set_facecolor(BG)
     ax.set_facecolor(BG)
 
-    colors = ['#6C63FF', '#10B981', '#F59E0B', '#EF4444', '#3B82F6', '#8B5CF6', '#EC4899', '#14B8A6']
-
-    for i, r in enumerate(results):
-        ret = r['return']
-        final_val = cash * (1 + ret / 100)
-        # 简化权益曲线：假设线性增长
-        # 真实曲线需要逐日数据，这里用起始-终止线段表示
-        label = f'{r["ticker"]} {ret:+.1f}%'
-        ax.bar(i, ret, color=colors[i % len(colors)], label=label, width=0.6)
+    ax.plot(dates, cumulative_pct, color=GREEN, linewidth=1.5, label='Portfolio Return')
 
     ax.axhline(0, color='white', linewidth=0.5, linestyle='--')
-    ax.set_xticks(range(len(tickers)))
-    ax.set_xticklabels(tickers, color='white', fontsize=11)
     ax.tick_params(colors='white')
     ax.yaxis.set_major_formatter(mticker.PercentFormatter())
-    ax.set_ylabel('收益率 (%)', color='white', fontsize=10)
-    ax.set_title('AlphaFlow V8.1 回测收益对比', color='white', fontsize=13, pad=12)
+    ax.set_ylabel('累计收益率 (%)', color='white', fontsize=10)
+    ax.set_title('AlphaFlow V9.0 真实组合回测资金曲线 (60/40配置)', color='white', fontsize=13, pad=12)
 
-    legend = ax.legend(
-        loc='upper right', framealpha=0.2,
-        labelcolor='white', fontsize=9,
-        facecolor='#1C1C1C', edgecolor='none'
-    )
-    legend.get_frame().set_facecolor('#1C1C1C')
+    legend = ax.legend(loc='upper left', framealpha=0.2, labelcolor='white', facecolor='#1C1C1C', edgecolor='none')
+    if legend:
+        legend.get_frame().set_facecolor('#1C1C1C')
 
     for spine in ax.spines.values():
         spine.set_edgecolor('#333')
-    ax.tick_params(colors='white')
 
     plt.tight_layout()
     out_path = Path('equity_curve.png')
-    plt.savefig(out_path, dpi=150, bbox_inches='tight',
-                facecolor=BG, edgecolor='none')
+    plt.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=BG, edgecolor='none')
     plt.close()
     print(f'\n📈 Equity Curve 已保存: {out_path.resolve()}')
 
@@ -315,7 +374,7 @@ def plot_equity_curves(results, config):
 # ============================================================
 if __name__ == '__main__':
     config = load_config()
-    results = run_backtest(config)
+    results = run_portfolio_backtest(config)
     print_summary(results)
-    plot_equity_curves(results, config)
+    plot_portfolio_equity(results)
     print('\n✅ 回测完成！')

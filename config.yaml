@@ -21,18 +21,24 @@ strategy:
   atr_period: 14           # ATR 计算周期
   atr_multiplier: 2.5      # ATR 止损倍数
 
-  # 移动止盈
-  trailing_stop: 0.12     # 从持仓最高点回撤百分比
+  # [P1-新增] 波动率状态过滤
+  vol_filter_period: 100   # ATR 均值回看周期（100 个交易日）
+  vol_filter_ratio: 0.8    # ATR / ATR均值 > 此比值才入场（过滤震荡市）
+
+  # [P1-改进] ATR 动态移动止盈（替代固定 12%）
+  trailing_atr_mult: 3.0   # 移动止盈距离 = 3.0 × ATR
+  trailing_stop: 0.12      # 保留旧参数作为兜底上限
 
 risk:
-  risk_per_trade: 0.015    # 每笔交易风险敞口 (1.5%)
-  index_multiplier: 3.0   # 大盘指数 (QQQ/VOO) 风险倍数
+  risk_per_trade: 0.030    # 每笔交易风险敞口提升至 (3.0%)
+  alloc_index: 0.60       # 指数类标的（VOO, QQQ）最大资金分配占比 60%
+  alloc_stock: 0.40       # 个股类标的最大资金分配占比 40%
 
 backtest:
   initial_cash: 10000.0    # 初始资金
   commission: 0.001       # 交易佣金 (0.1%)
-  start_date: "2022-01-01"
-  end_date: "2026-03-20"
+  start_date: "2010-01-01" # [P0] 延长至 2010，覆盖多个牛熊周期
+  end_date: "2026-05-13"
 
 live:
   tws_host: "127.0.0.1"
@@ -45,8 +51,17 @@ tickers:
   - "QQQ"
   - "VOO"
   - "NVDA"
-  - "MSFT"
   - "AMD"
-  - "AAPL"
-  - "GOOGL"
   - "TSLA"
+  - "COIN"
+  - "PLTR"
+  - "MSTR"
+  - "SMCI"
+  - "CRWD"
+  - "UPST"
+  - "CVNA"
+  - "SHOP"
+  - "SQ"
+  - "MARA"
+  - "APP"
+  - "NET"
