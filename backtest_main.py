@@ -111,10 +111,13 @@ class AlphaFlowStrategy(bt.Strategy):
                     total_value = self.broker.getvalue()
                     risk_mult   = self.p.index_multiplier if d._name in ['QQQ', 'VOO'] else 1.0
                     risk_amount = total_value * self.p.risk_per_trade * risk_mult
-                    atr_stop    = ind['atr'][0] * self.p.atr_multiplier
-                    if atr_stop <= 0:
-                        continue
+                    atr_stop    = max(ind['atr'][0] * self.p.atr_multiplier, 0.01)
                     size = int(risk_amount / atr_stop)
+
+                    # 现金约束检查：仓位不能超过可用现金
+                    if size * d.close[0] > self.broker.get_cash():
+                        size = int(self.broker.get_cash() * 0.95 / d.close[0])
+
                     if size <= 0:
                         continue
                     self.buy(d, size=size)
@@ -126,6 +129,10 @@ class AlphaFlowStrategy(bt.Strategy):
 def fetch_data(ticker, start, end):
     try:
         df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+        # yfinance 新版返回 MultiIndex 列名 (e.g. ('Close', 'QQQ'))
+        # backtrader 需要简单字符串列名，这里做扁平化处理
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         df['openinterest'] = 0
         return df
     except Exception as e:
@@ -150,8 +157,6 @@ def backtest_ticker(ticker, config):
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(cash)
     cerebro.broker.setcommission(commission)
-    # 允许做多
-    cerebro.addsizer(bt.sizers.FixedSize)
 
     data = bt.feeds.PandasData(dataname=df)
     cerebro.adddata(data, name=ticker)
@@ -172,16 +177,36 @@ def backtest_ticker(ticker, config):
         index_multiplier=config['risk'].get('index_multiplier', 3.0),
     )
 
+    # 添加分析器
+    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
+    cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', riskfreerate=0.04)
+    cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+
     initial = cerebro.broker.getvalue()
-    cerebro.run()
+    strats = cerebro.run()
     final   = cerebro.broker.getvalue()
     ret     = (final - initial) / initial * 100
+
+    # 提取分析器结果
+    strat = strats[0]
+    trade_analysis = strat.analyzers.trades.get_analysis()
+    sharpe_analysis = strat.analyzers.sharpe.get_analysis()
+    dd_analysis = strat.analyzers.drawdown.get_analysis()
+
+    total_trades = trade_analysis.get('total', {}).get('total', 0)
+    won = trade_analysis.get('won', {}).get('total', 0)
+    win_rate = (won / total_trades * 100) if total_trades > 0 else 0.0
+    sharpe = sharpe_analysis.get('sharperatio', 0.0) or 0.0
+    max_dd = dd_analysis.get('max', {}).get('drawdown', 0.0) or 0.0
 
     return {
         'ticker':         ticker,
         'return':         ret,
         'final_value':    final,
-        'trades':         sum(1 for p in cerebro.broker.orders if p.execstatus in [bt.Order.Executed]),
+        'trades':         total_trades,
+        'win_rate':       win_rate,
+        'sharpe':         round(sharpe, 2),
+        'max_drawdown':   round(max_dd, 2),
     }
 
 
@@ -212,24 +237,29 @@ def print_summary(results):
         print('No results.')
         return
 
-    # 计算指标（简单估算，基于最终权益）
-    # 夏普/回撤需要逐笔数据，这里用简化版
-    for r in results:
-        flag = '🟢' if r['return'] >= 0 else '🔴'
-
     print()
-    print(f'{'标的':<8} {'收益率':>10} {'状态':>4}')
-    print('-'*30)
+    header = f'{"标的":<8} {"收益率":>10} {"夏普比率":>10} {"最大回撤":>10} {"交易数":>6} {"胜率":>8}'
+    print(header)
+    print('-' * 60)
     for r in results:
         flag = '🟢' if r['return'] >= 0 else '🔴'
-        print(f'{r["ticker"]:<8} {r["return"]:>+8.2f}%  {flag}')
-    print('-'*30)
-    avg = np.mean([r['return'] for r in results])
-    print(f'{'平均':<8} {avg:>+8.2f}%')
+        wr = f"{r['win_rate']:.0f}%" if r['trades'] > 0 else '—'
+        print(f'{r["ticker"]:<8} {r["return"]:>+8.2f}%  {r["sharpe"]:>8.2f}  {r["max_drawdown"]:>8.2f}%  {r["trades"]:>4}  {wr:>6}  {flag}')
+    print('-' * 60)
+    avg_ret = np.mean([r['return'] for r in results])
+    avg_sharpe = np.mean([r['sharpe'] for r in results])
+    avg_dd = np.mean([r['max_drawdown'] for r in results])
+    total_trades = sum(r['trades'] for r in results)
+    print(f'{"平均":<8} {avg_ret:>+8.2f}%  {avg_sharpe:>8.2f}  {avg_dd:>8.2f}%  {total_trades:>4}')
 
     # 找出最佳标的
     best = max(results, key=lambda x: x['return'])
     print(f'\n🏆 最佳标的: {best["ticker"]} ({best["return"]:+.2f}%)')
+
+    # 保存结果到 CSV
+    df = pd.DataFrame(results)
+    df.to_csv('backtest_results.csv', index=False)
+    print(f'💾 结果已保存: backtest_results.csv')
 
 
 # ============================================================

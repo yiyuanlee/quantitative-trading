@@ -29,7 +29,7 @@ risk:
   index_multiplier: 3.0   # 大盘指数 (QQQ/VOO) 风险倍数
 
 backtest:
-  initial_cash: 3000.0     # 初始资金
+  initial_cash: 10000.0    # 初始资金
   commission: 0.001       # 交易佣金 (0.1%)
   start_date: "2022-01-01"
   end_date: "2026-03-20"
